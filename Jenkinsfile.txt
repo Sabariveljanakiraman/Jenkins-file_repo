@@ -1,0 +1,320 @@
+
+pipeline {
+    agent any
+
+    tools {
+        jdk 'JDK17'
+        maven 'Maven3'
+        nodejs 'NodeJS22'
+    }
+
+    options {
+        timestamps()
+        skipDefaultCheckout(true)
+    }
+
+    stages {
+
+        // 1. Checkout GitHub repository
+        stage('Checkout') {
+            steps {
+                echo 'Checking out GitHub repository...'
+                checkout scm
+            }
+        }
+
+        // 2. Build and test Java backend
+        stage('Backend Build and Test') {
+            steps {
+                dir('InvoiceBill') {
+                    echo 'Building Spring Boot Backend...'
+                    bat 'mvn -B clean verify'
+                }
+            }
+        }
+
+        // 3. Install React dependencies
+        stage('Frontend Install Dependencies') {
+            steps {
+                dir('invoiceBillFrontend') {
+                    echo 'Installing React dependencies...'
+                    bat 'npm ci'
+                }
+            }
+        }
+
+        // 4. Build React frontend
+        stage('Frontend Build') {
+            steps {
+                dir('invoiceBillFrontend') {
+                    echo 'Building React Frontend...'
+                    bat 'set "CI=false" && npm run build'
+                }
+            }
+        }
+
+        // 5. Archive build artifacts
+        stage('Archive Artifacts') {
+            steps {
+                echo 'Archiving WAR and React build files...'
+
+                archiveArtifacts(
+                    artifacts: 'InvoiceBill/target/*.war, invoiceBillFrontend/build/**',
+                    allowEmptyArchive: false
+                )
+            }
+        }
+
+        // 6. Send build success email BEFORE deployment
+        stage('Build Success Email Notification') {
+            steps {
+                echo 'Build successful! Sending email notification...'
+
+                emailext(
+                    subject: "BUILD SUCCESS: InvoiceBill #${BUILD_NUMBER} - Deployment Starting",
+
+                    mimeType: 'text/html',
+
+                    body: """
+                        <html>
+                        <body style="font-family: Arial, sans-serif;">
+
+                            <h2 style="color: green;">
+                                InvoiceBill Build Successful!
+                            </h2>
+
+                            <p>Hello,</p>
+
+                            <p>
+                                The InvoiceBill CI build has completed successfully.
+                            </p>
+
+                            <h3>Build Details</h3>
+
+                            <table border="1" cellpadding="8"
+                                   cellspacing="0"
+                                   style="border-collapse: collapse;">
+
+                                <tr>
+                                    <td><b>Project</b></td>
+                                    <td>InvoiceBill</td>
+                                </tr>
+
+                                <tr>
+                                    <td><b>Build Number</b></td>
+                                    <td>${BUILD_NUMBER}</td>
+                                </tr>
+
+                                <tr>
+                                    <td><b>Backend Build</b></td>
+                                    <td>SUCCESS</td>
+                                </tr>
+
+                                <tr>
+                                    <td><b>Frontend Build</b></td>
+                                    <td>SUCCESS</td>
+                                </tr>
+
+                                <tr>
+                                    <td><b>Artifact Archiving</b></td>
+                                    <td>SUCCESS</td>
+                                </tr>
+
+                                <tr>
+                                    <td><b>Build Status</b></td>
+                                    <td style="color: green;">
+                                        SUCCESS
+                                    </td>
+                                </tr>
+
+                            </table>
+
+                            <p>
+                                <b>Next Step:</b>
+                                Local deployment is starting now.
+                            </p>
+
+                            <p>
+                                <a href="${BUILD_URL}">
+                                    View Jenkins Build
+                                </a>
+                            </p>
+
+                            <br>
+
+                            <p>
+                                Regards,<br>
+                                <b>Jenkins CI/CD Automation</b>
+                            </p>
+
+                        </body>
+                        </html>
+                    """
+                )
+            }
+        }
+
+        // 7. Deploy to local Windows folder
+        stage('Deploy to Local Folder') {
+            steps {
+                echo 'Deploying InvoiceBill build to local Windows folder...'
+
+                bat '''
+                    @echo off
+
+                    set "DEPLOY_DIR=D:\\DevOps-Testing-Buildfiles"
+
+                    echo =====================================
+                    echo STARTING LOCAL DEPLOYMENT
+                    echo =====================================
+
+                    echo Checking backend WAR file...
+
+                    if not exist "InvoiceBill\\target\\*.war" (
+                        echo ERROR: WAR file not found!
+                        exit /b 1
+                    )
+
+                    echo Checking frontend build...
+
+                    if not exist "invoiceBillFrontend\\build\\index.html" (
+                        echo ERROR: Frontend build not found!
+                        exit /b 1
+                    )
+
+                    echo Creating deployment directory...
+
+                    if not exist "%DEPLOY_DIR%" mkdir "%DEPLOY_DIR%"
+
+                    if not exist "%DEPLOY_DIR%" (
+                        echo ERROR: Could not create deployment directory!
+                        exit /b 1
+                    )
+
+                    echo Copying Java WAR file...
+
+                    copy /Y "InvoiceBill\\target\\*.war" "%DEPLOY_DIR%\\"
+
+                    if errorlevel 1 (
+                        echo ERROR: WAR file copy failed!
+                        exit /b 1
+                    )
+
+                    echo Preparing React frontend directory...
+
+                    if exist "%DEPLOY_DIR%\\Frontend" (
+                        rmdir /S /Q "%DEPLOY_DIR%\\Frontend"
+                    )
+
+                    mkdir "%DEPLOY_DIR%\\Frontend"
+
+                    if not exist "%DEPLOY_DIR%\\Frontend" (
+                        echo ERROR: Could not create Frontend directory!
+                        exit /b 1
+                    )
+
+                    echo Copying React frontend build...
+
+                    robocopy "invoiceBillFrontend\\build" "%DEPLOY_DIR%\\Frontend" /E
+
+                    if errorlevel 8 (
+                        echo ERROR: Frontend copy failed!
+                        exit /b 1
+                    )
+
+                    echo =====================================
+                    echo DEPLOYMENT COMPLETED SUCCESSFULLY!
+                    echo =====================================
+
+                    echo Deployment location: %DEPLOY_DIR%
+
+                    exit /b 0
+                '''
+            }
+        }
+    }
+
+    // 8. Pipeline-level post actions
+    post {
+
+        success {
+            echo 'SUCCESS: Build, tests, email notification and deployment completed!'
+        }
+
+        failure {
+            echo 'FAILED: Please check the Jenkins console output.'
+
+            emailext(
+                subject: "PIPELINE FAILED: InvoiceBill #${BUILD_NUMBER}",
+
+                mimeType: 'text/html',
+
+                body: """
+                    <html>
+                    <body style="font-family: Arial, sans-serif;">
+
+                        <h2 style="color: red;">
+                            InvoiceBill Pipeline Failed!
+                        </h2>
+
+                        <p>Hello,</p>
+
+                        <p>
+                            Unfortunately, the InvoiceBill Jenkins pipeline
+                            did not complete successfully.
+                        </p>
+
+                        <h3>Build Details</h3>
+
+                        <table border="1" cellpadding="8"
+                               cellspacing="0"
+                               style="border-collapse: collapse;">
+
+                            <tr>
+                                <td><b>Project</b></td>
+                                <td>InvoiceBill</td>
+                            </tr>
+
+                            <tr>
+                                <td><b>Build Number</b></td>
+                                <td>${BUILD_NUMBER}</td>
+                            </tr>
+
+                            <tr>
+                                <td><b>Status</b></td>
+                                <td style="color: red;">
+                                    FAILURE
+                                </td>
+                            </tr>
+
+                        </table>
+
+                        <p>
+                            Please check the Jenkins console output
+                            to identify the failure.
+                        </p>
+
+                        <p>
+                            <a href="${BUILD_URL}console">
+                                View Jenkins Console Output
+                            </a>
+                        </p>
+
+                        <br>
+
+                        <p>
+                            Regards,<br>
+                            <b>Jenkins CI/CD Automation</b>
+                        </p>
+
+                    </body>
+                    </html>
+                """
+            )
+        }
+
+        always {
+            echo 'Jenkins pipeline execution completed.'
+        }
+    }
+}
