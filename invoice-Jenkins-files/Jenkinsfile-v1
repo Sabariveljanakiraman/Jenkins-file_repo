@@ -1,0 +1,190 @@
+pipeline {
+    agent any
+
+    tools {
+        jdk 'JDK17'
+        maven 'Maven3'
+        nodejs 'NodeJS22'
+    }
+
+    triggers {
+        // Daily at 12:00 PM India time.
+        cron('TZ=Asia/Kolkata\n0 12 * * *')
+    }
+
+    options {
+        timestamps()
+        skipDefaultCheckout(true)
+        buildDiscarder(logRotator(numToKeepStr: '15'))
+    }
+
+    environment {
+        APP_REPO = 'https://github.com/Meganartech/InvoiceBill.git'
+        GITHUB_CREDENTIALS = 'github-credentials'
+        APP_BRANCH = 'v1'
+        DEPLOY_DIR = 'D:\\DevOps-Testing-Buildfiles\\v1'
+    }
+
+    stages {
+        stage('Checkout InvoiceBill (v1)') {
+            steps {
+                deleteDir()
+                echo "Checking out InvoiceBill branch: ${APP_BRANCH}"
+                git branch: "${APP_BRANCH}",
+                    credentialsId: "${GITHUB_CREDENTIALS}",
+                    url: "${APP_REPO}"
+            }
+        }
+
+        stage('Backend Build and Test') {
+            steps {
+                dir('InvoiceBill') {
+                    echo 'Building Spring Boot backend with Java 17 and Maven...'
+                    bat 'mvn -B clean verify'
+                }
+            }
+        }
+
+        stage('Frontend Install Dependencies') {
+            steps {
+                dir('invoiceBillFrontend') {
+                    echo 'Installing React dependencies...'
+                    bat 'npm ci'
+                }
+            }
+        }
+
+        stage('Frontend Build') {
+            steps {
+                dir('invoiceBillFrontend') {
+                    echo 'Building React frontend...'
+                    bat 'set "CI=false" && npm run build'
+                }
+            }
+        }
+
+        stage('Archive Artifacts') {
+            steps {
+                archiveArtifacts(
+                    artifacts: 'InvoiceBill/target/*.war, invoiceBillFrontend/build/**',
+                    allowEmptyArchive: false
+                )
+            }
+        }
+
+        stage('Build Success Email Notification') {
+            steps {
+                emailext(
+                    subject: "BUILD SUCCESS: InvoiceBill ${APP_BRANCH} #${BUILD_NUMBER} - Deployment Starting",
+                    mimeType: 'text/html',
+                    body: """
+                        <html>
+                        <body style="font-family: Arial, sans-serif;">
+                            <h2 style="color: green;">InvoiceBill ${APP_BRANCH} Build Successful!</h2>
+                            <p>The backend and frontend CI build completed successfully.</p>
+                            <table border="1" cellpadding="8" cellspacing="0"
+                                   style="border-collapse: collapse;">
+                                <tr><td><b>Project</b></td><td>InvoiceBill</td></tr>
+                                <tr><td><b>Branch</b></td><td>${APP_BRANCH}</td></tr>
+                                <tr><td><b>Build Number</b></td><td>${BUILD_NUMBER}</td></tr>
+                                <tr><td><b>Backend</b></td><td>SUCCESS</td></tr>
+                                <tr><td><b>Frontend</b></td><td>SUCCESS</td></tr>
+                                <tr><td><b>Status</b></td><td style="color: green;">SUCCESS</td></tr>
+                            </table>
+                            <p>Local deployment is starting now.</p>
+                            <p><a href="${BUILD_URL}">View Jenkins Build</a></p>
+                            <p>Regards,<br><b>Jenkins CI/CD Automation</b></p>
+                        </body>
+                        </html>
+                    """
+                )
+            }
+        }
+
+        stage('Deploy to Local Folder') {
+            steps {
+                echo "Deploying ${APP_BRANCH} build to ${DEPLOY_DIR}"
+                bat """
+                    @echo off
+                    set "DEPLOY_DIR=D:\\DevOps-Testing-Buildfiles\\v1"
+
+                    echo =====================================
+                    echo DEPLOYING INVOICE BILL v1
+                    echo =====================================
+
+                    if not exist "InvoiceBill\\target" (
+                        echo ERROR: Backend target directory not found!
+                        exit /b 1
+                    )
+
+                    if not exist "invoiceBillFrontend\\build\\index.html" (
+                        echo ERROR: Frontend build not found!
+                        exit /b 1
+                    )
+
+                    if not exist "%DEPLOY_DIR%" mkdir "%DEPLOY_DIR%"
+                    if not exist "%DEPLOY_DIR%" (
+                        echo ERROR: Could not create deployment directory!
+                        exit /b 1
+                    )
+
+                    echo Copying backend WAR file...
+                    copy /Y "InvoiceBill\\target\\*.war" "%DEPLOY_DIR%\\"
+                    if errorlevel 1 (
+                        echo ERROR: WAR file copy failed!
+                        exit /b 1
+                    )
+
+                    if exist "%DEPLOY_DIR%\\Frontend" (
+                        rmdir /S /Q "%DEPLOY_DIR%\\Frontend"
+                    )
+                    mkdir "%DEPLOY_DIR%\\Frontend"
+
+                    echo Copying React frontend build...
+                    robocopy "invoiceBillFrontend\\build" "%DEPLOY_DIR%\\Frontend" /E
+                    if errorlevel 8 (
+                        echo ERROR: Frontend copy failed!
+                        exit /b 1
+                    )
+
+                    echo =====================================
+                    echo DEPLOYMENT COMPLETED SUCCESSFULLY!
+                    echo Deployment location: %DEPLOY_DIR%
+                    echo =====================================
+                    exit /b 0
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "SUCCESS: InvoiceBill ${APP_BRANCH} build, tests, archiving, notification and deployment completed."
+        }
+
+        failure {
+            echo "FAILED: InvoiceBill ${APP_BRANCH}. Check the Jenkins console output."
+            emailext(
+                subject: "PIPELINE FAILED: InvoiceBill ${APP_BRANCH} #${BUILD_NUMBER}",
+                mimeType: 'text/html',
+                body: """
+                    <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2 style="color: red;">InvoiceBill ${APP_BRANCH} Pipeline Failed!</h2>
+                        <p>The pipeline did not complete successfully.</p>
+                        <p><b>Branch:</b> ${APP_BRANCH}<br>
+                           <b>Build Number:</b> ${BUILD_NUMBER}<br>
+                           <b>Status:</b> FAILURE</p>
+                        <p><a href="${BUILD_URL}console">View Jenkins Console Output</a></p>
+                        <p>Regards,<br><b>Jenkins CI/CD Automation</b></p>
+                    </body>
+                    </html>
+                """
+            )
+        }
+
+        always {
+            echo "Jenkins pipeline execution completed for ${APP_BRANCH}."
+        }
+    }
+}
