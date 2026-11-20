@@ -23,6 +23,7 @@ pipeline {
         GITHUB_CREDENTIALS = 'github-credentials'
         APP_BRANCH = 'v3'
         DEPLOY_DIR = 'D:\\DevOps-Testing-Buildfiles\\v3'
+        EMAIL_RECIPIENT = credentials('invoicebill-v3-email-recipient')
     }
 
     stages {
@@ -75,6 +76,7 @@ pipeline {
         stage('Build Success Email Notification') {
             steps {
                 emailext(
+                    to: env.EMAIL_RECIPIENT,
                     subject: "BUILD SUCCESS: InvoiceBill ${APP_BRANCH} #${BUILD_NUMBER} - Deployment Starting",
                     mimeType: 'text/html',
                     body: """
@@ -165,6 +167,7 @@ pipeline {
         failure {
             echo "FAILED: InvoiceBill ${APP_BRANCH}. Check the Jenkins console output."
             emailext(
+                to: env.EMAIL_RECIPIENT,
                 subject: "PIPELINE FAILED: InvoiceBill ${APP_BRANCH} #${BUILD_NUMBER}",
                 mimeType: 'text/html',
                 body: """
